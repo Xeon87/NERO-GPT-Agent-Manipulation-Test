@@ -1,0 +1,25 @@
+# Secrets / local configuration
+.env
+*.key
+config/nero.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime logs / generated files
+logs/
+*.log
+*.tmp
+
+# ROS / build workspaces should not be committed here
+build/
+install/
+log/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
