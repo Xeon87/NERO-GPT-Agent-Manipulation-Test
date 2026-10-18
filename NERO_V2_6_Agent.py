@@ -76,7 +76,7 @@ Contract rules:
 - set_gripper_opening(target): changes only gripper aperture in position mode before a grasp. It must not be used to release a held object.
 - move_above(object): moves only the robot TCP to ~120 mm above the object. The object is EXPECTED TO REMAIN STATIONARY. No grasp occurs yet.
 - approach(object): lowers the TCP to the grasp pose. This is a PRE-GRASP NON-CONTACT descent: the object should remain approximately stationary. >4 mm object motion is treated as premature contact/poke and triggers a wider-aperture retry prior.
-- recover_from_safety(object, strategy, diagnosis): EXPLICIT recovery for a latched PRE-GRASP safety stop. It is not automatic. First inspect the failure and observe_scene, state a concise diagnosis, then choose a recovery strategy. The tool clears the V69 latch, retreats upward away from the object, and consumes the ONE retry allowed for that object.
+- recover_from_safety(object, strategy, diagnosis): EXPLICIT recovery for a latched PRE-GRASP safety stop. It is not automatic. First inspect the failure and observe_scene, state a concise diagnosis, then choose a recovery strategy. The tool clears the V69 latch, retreats upward before narrowing the gripper, and consumes the ONE retry allowed for that object.
 - clamp_gripper(force): closes the fingers and establishes provisional contact/hold. The object MAY REMAIN STATIONARY while being clamped.
 - lift(height): raises the TCP and the grasped object MUST follow upward. This validates the grasp physically.
 - move_above_bin(bin): moves the TCP and the held object together above the bin. The object MUST remain with the gripper during transport.
