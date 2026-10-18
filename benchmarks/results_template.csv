@@ -1,0 +1,1 @@
+run_id,date,task,model,reasoning,objects_requested,success,total_time_s,first_try_grasps,planning_recoveries,safety_recoveries,placement_verifications,failure_category,notes
