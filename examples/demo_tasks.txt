@@ -1,0 +1,7 @@
+# NERO V2-6 demo prompts
+
+Put the red ball into the red bin.
+
+Put the red objects to the bin with the same color, one by one.
+
+Pick the objects one by one, and put them into the bin with the same color.
