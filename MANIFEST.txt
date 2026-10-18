@@ -1,0 +1,35 @@
+NERO V2-6 Public Release / GitHub v0.1.0
+
+CORE
+- NERO_V2_6_Agent.py
+- NERO_V2_6_Unified_Backend.py
+- NERO_V69_ReachableZone_BioIK_Planner_Core.py (frozen)
+- start_nero_v2_6.sh
+
+PUBLICATION MATERIALS
+- README.md
+- QUICKSTART.md
+- ARCHITECTURE.md
+- YOUTUBE_DEMO.md
+- BENCHMARKING.md
+- CHANGELOG.md
+- RELEASE_NOTES.md
+- CONTRIBUTING.md
+- SECURITY.md
+- THIRD_PARTY_NOTICES.md
+- LICENSE.md
+- examples/demo_tasks.txt
+- benchmarks/results_template.csv
+- config/nero.env.example
+- config/pricing.example.json
+- release_check.sh
+
+VALIDATION
+- Python py_compile: PASS
+- Bash syntax: PASS
+- Secret-pattern sanity check: PASS
+- Agent import/config smoke test: PASS
+- Frozen V69 SHA256: 3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7
+
+NOTE
+ROS2/MuJoCo dynamic execution cannot be validated in this build container; run the included demo on the established NERO Ubuntu workstation before tagging a public release.
