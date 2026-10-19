@@ -1,0 +1,30 @@
+name: V2-7.1 Static Validation
+
+on:
+  push:
+    branches:
+      - v2-7-1-placement-aware-egg
+  workflow_dispatch:
+
+jobs:
+  validate-installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile V2-7.1 installer payload and runner
+        run: |
+          python -m py_compile tools/upgrade_v2_7_to_v2_7_1.py
+          python -m py_compile tools/run_v2_7_1_upgrader.py
+      - name: Check launcher shell syntax
+        run: bash -n start_nero_v2_7_1.sh
+      - name: Check required hardening markers
+        run: |
+          grep -q 'V2-7.1 — Placement-Aware Egg Handling' tools/upgrade_v2_7_to_v2_7_1.py
+          grep -q 'BYSTANDER_EGG_DISTURBED' tools/upgrade_v2_7_to_v2_7_1.py
+          grep -q 'guarded_insert_and_release' tools/upgrade_v2_7_to_v2_7_1.py
+          grep -q 'Copy Full Log' tools/upgrade_v2_7_to_v2_7_1.py
+          grep -q 'V2-7.1 blocks legacy egg placement' tools/run_v2_7_1_upgrader.py
+          grep -q 'run_v2_7_1_upgrader.py' start_nero_v2_7_1.sh
