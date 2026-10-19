@@ -1,0 +1,31 @@
+name: V2-7.2 Static Validation
+
+on:
+  push:
+    branches:
+      - v2-7-2-hold-continuity-wrist-reorientation
+  workflow_dispatch:
+
+jobs:
+  validate-installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile V2-7.2 installer payload
+        run: |
+          python -m py_compile tools/upgrade_v2_7_1_to_v2_7_2.py
+          python -m py_compile tools/run_v2_7_2_patch.py
+          python -m py_compile tools/run_v2_7_2_upgrader.py
+      - name: Check launcher syntax
+        run: bash -n start_nero_v2_7_2.sh
+      - name: Check V2-7.2 hardening markers
+        run: |
+          grep -q 'V2-7.2 HOLD CONTINUITY' tools/upgrade_v2_7_1_to_v2_7_2.py
+          grep -q 'V2-7.2 WRIST PREFLIGHT' tools/upgrade_v2_7_1_to_v2_7_2.py
+          grep -q '_v272_add_egg_number_labels_to_mjcf' tools/upgrade_v2_7_1_to_v2_7_2.py
+          grep -q 'V2-7.2 GRASP LOST RECOVERY' tools/upgrade_v2_7_1_to_v2_7_2.py
+          grep -q 'NERO_V2_7_1_Unified_Backend.py' tools/run_v2_7_2_patch.py
+          grep -q 'run_v2_7_2_upgrader.py' start_nero_v2_7_2.sh
