@@ -16,13 +16,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NERO_ROOT="${NERO_ROOT:-$HOME/mujoco_ws/nero}"
 SRC_DIR="${NERO_V27_DIR:-$NERO_ROOT/NERO_V2_7_Constraint_Aware_Grasp_Planning}"
 OUT_DIR="${NERO_V271_DIR:-$NERO_ROOT/NERO_V2_7_1_Placement_Aware_Egg_Handling}"
-UPGRADER="$SCRIPT_DIR/tools/upgrade_v2_7_to_v2_7_1.py"
+UPGRADER="$SCRIPT_DIR/tools/run_v2_7_1_upgrader.py"
 
 fail(){ echo "[FAIL] $*" >&2; exit 1; }
 info(){ echo "[INFO] $*"; }
 ok(){ echo "[OK] $*"; }
 
-[[ -f "$UPGRADER" ]] || fail "Bundled V2-7.1 upgrader not found: $UPGRADER"
+[[ -f "$UPGRADER" ]] || fail "Bundled hardened V2-7.1 upgrader not found: $UPGRADER"
 
 required=(
   NERO_V2_7_Unified_Backend.py
