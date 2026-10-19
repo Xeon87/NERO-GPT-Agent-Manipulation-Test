@@ -1,0 +1,198 @@
+name: Build NERO V2-8 Agent-Only from V2-7.2
+
+on:
+  push:
+    branches:
+      - v2-8-agent-orchestration-only-from-v272
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed V2-6 and normalize historical packaging typo
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py \
+             NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/upgrade_v2_6_egg_to_v2_7.py')
+          s = p.read_text(encoding='utf-8')
+          old = '        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new = '        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 -m py_compile tools/upgrade_v2_6_egg_to_v2_7.py
+
+      - name: Rebuild validated V2-7.2 baseline
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+          python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+          python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+
+      - name: Build V2-8 from V2-7.2 by patching Agent only
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_7_2_to_v2_8_agent_only.py \
+            build/v272 \
+            --output-dir build/NERO_V2_8_Agent_Orchestration_Only_From_V272
+
+      - name: Prove infrastructure is byte-identical to V2-7.2
+        run: |
+          set -euo pipefail
+          B=build/v272
+          R=build/NERO_V2_8_Agent_Orchestration_Only_From_V272
+          cmp "$B/NERO_V2_7_1_Unified_Backend.py" "$R/NERO_V2_7_1_Unified_Backend.py"
+          cmp "$B/NERO_V69_ReachableZone_BioIK_Planner_Core.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          cmp "$B/start_nero_v2_7_2.sh" "$R/start_nero_v2_7_2.sh"
+          cmp "$R/start_nero_v2_7_2.sh" "$R/start_nero_v2_8.sh"
+          echo '[OK] backend exact V2-7.2'
+          echo '[OK] V69 exact V2-7.2/frozen'
+          echo '[OK] launcher exact V2-7.2'
+          echo '[OK] start_nero_v2_8.sh is byte-identical launcher copy'
+
+      - name: Validate syntax paths and checksums
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_8_Agent_Orchestration_Only_From_V272
+          test -f "$R/NERO_V2_7_1_Unified_Backend.py"
+          test -f "$R/NERO_V2_7_1_Agent.py"
+          test -f "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          test -f "$R/start_nero_v2_8.sh"
+          test -f "$R/SHA256SUMS.txt"
+          python3 -m py_compile \
+            "$R/NERO_V2_7_1_Unified_Backend.py" \
+            "$R/NERO_V2_7_1_Agent.py" \
+            "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          bash -n "$R/start_nero_v2_8.sh"
+          (cd "$R" && sha256sum -c SHA256SUMS.txt)
+          test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = \
+            "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+
+      - name: Unit test orchestration fix 1 auto-clamp
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          p=Path('build/NERO_V2_8_Agent_Orchestration_Only_From_V272/NERO_V2_7_1_Agent.py')
+          spec=importlib.util.spec_from_file_location('nero_v28_agent', p)
+          mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+          logs=[]; calls=[]
+          def runner(name,args):
+              calls.append((name,dict(args)))
+              if name=='approach_planned_grasp':
+                  return {'ok':True,'state_after':{'stage':'GRASP_POSE_REACHED'},'warnings':[]}
+              if name=='clamp_gripper':
+                  return {'ok':True,'state_after':{'stage':'GRASP_ESTABLISHED'},'warnings':[]}
+              return {'ok':True,'state_after':{'stage':'OBSERVED'},'warnings':[]}
+          a=mod.NeroLLMAgent(logs.append, runner)
+          responses=iter([
+              {'id':'r1','output':[{'type':'function_call','name':'approach_planned_grasp','call_id':'c1','arguments':'{"object_name":"egg_3","candidate_id":"major_aligned__center"}'}],'usage':{}},
+              {'id':'r2','output':[{'type':'message','content':[{'type':'output_text','text':'done'}]}],'usage':{}},
+          ])
+          a._post_responses=lambda payload,api_key: next(responses)
+          a.run_task('Pick up egg_3.', api_key='test')
+          assert [x[0] for x in calls]==['approach_planned_grasp','clamp_gripper'], calls
+          assert any('[LLM ORCHESTRATOR AUTO-CLAMP]' in x for x in logs), logs
+          print('[OK] auto-clamp orchestration')
+          PY
+
+      - name: Unit test orchestration fix 2 terminal-aware plural guard
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          p=Path('build/NERO_V2_8_Agent_Orchestration_Only_From_V272/NERO_V2_7_1_Agent.py')
+          spec=importlib.util.spec_from_file_location('nero_v28_agent_terminal', p)
+          mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+          logs=[]; payloads=[]; guard_calls={'n':0}
+          def runner(name,args):
+              if name=='plan_grasp':
+                  return {
+                      'ok':False,
+                      'physical_verification':{
+                          'reason':'ALL_GRASP_CANDIDATES_EXHAUSTED_OR_INFEASIBLE',
+                          'reorientation_required':True,
+                          'reorientation_skill_available':False,
+                      },
+                      'state_after':{'stage':'OBSERVED'},
+                  }
+              if name=='observe_scene':
+                  guard_calls['n']+=1
+                  # First completion check: both remain physically in basket/object zone.
+                  # Second completion check: only the terminal object remains.
+                  pending=['egg_1','egg_2'] if guard_calls['n']==1 else ['egg_1']
+                  return {'ok':True,'scene':{'_test_pending':pending}}
+              return {'ok':True}
+          a=mod.NeroLLMAgent(logs.append, runner)
+          # Isolate completion-guard orchestration from scene parsing details.
+          a._task_object_names=lambda task,scene=None: (
+              list((scene or {}).get('_test_pending', ['egg_1','egg_2']))
+          )
+          responses=iter([
+              {'id':'r1','output':[{'type':'function_call','name':'plan_grasp','call_id':'p1','arguments':'{"object_name":"egg_1"}'}],'usage':{}},
+              {'id':'r2','output':[{'type':'message','content':[{'type':'output_text','text':'egg_1 blocked'}]}],'usage':{}},
+              {'id':'r3','output':[{'type':'message','content':[{'type':'output_text','text':'done'}]}],'usage':{}},
+          ])
+          def post(payload,api_key):
+              payloads.append(payload)
+              return next(responses)
+          a._post_responses=post
+          out=a.run_task('Handle egg_1 and egg_2.', api_key='test')
+          assert out=='done', out
+          assert any('egg_1 terminal-blocked' in x for x in logs), logs
+          nudges=[x for x in logs if '[MULTI-OBJECT GUARD]' in x]
+          assert len(nudges)==1, nudges
+          assert "egg_2" in nudges[0] and "egg_1" not in nudges[0].split('pending=',1)[1].split('|',1)[0], nudges[0]
+          assert any('all scene-pending requested objects are terminal-blocked' in x for x in logs), logs
+          print('[OK] terminal-aware plural completion guard')
+          PY
+
+      - name: Prove only Agent content differs from V2-7.2 runtime
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          B=Path('build/v272')
+          R=Path('build/NERO_V2_8_Agent_Orchestration_Only_From_V272')
+          shared=['NERO_V2_7_1_Unified_Backend.py','NERO_V69_ReachableZone_BioIK_Planner_Core.py','start_nero_v2_7_2.sh']
+          for n in shared:
+              assert (B/n).read_bytes()==(R/n).read_bytes(), n
+          assert (B/'NERO_V2_7_1_Agent.py').read_bytes()!=(R/'NERO_V2_7_1_Agent.py').read_bytes()
+          s=(R/'NERO_V2_7_1_Agent.py').read_text()
+          assert 'LLM ORCHESTRATOR AUTO-CLAMP' in s
+          assert 'LLM ORCHESTRATOR TERMINAL' in s
+          assert 'TASK SUMMARY' not in s
+          assert 'llm_message_bold' not in s
+          print('[OK] runtime behavior delta is Agent orchestration only')
+          PY
+
+      - name: Show exact package contract
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_8_Agent_Orchestration_Only_From_V272
+          echo '===== FILES ====='
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
+          echo '===== PATH CHECK ====='
+          cat "$R/PATH_CHECK.txt"
+          echo '===== SHA256 ====='
+          cat "$R/SHA256SUMS.txt"
+
+      - name: Upload complete V2-8 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_8_Agent_Orchestration_Only_From_V272
+          path: build/NERO_V2_8_Agent_Orchestration_Only_From_V272
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
