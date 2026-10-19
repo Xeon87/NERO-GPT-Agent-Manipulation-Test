@@ -1,0 +1,137 @@
+name: Clean-room NERO V2-7.6 from exact V2-7.2 backend
+on:
+  push:
+    branches: [v2-7-6-v272-backend-restore]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed V2-6 and normalize historical packaging typo
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/upgrade_v2_6_egg_to_v2_7.py')
+          s=p.read_text(encoding='utf-8')
+          old='        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new='        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s: p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+          python3 -m py_compile tools/upgrade_v2_6_egg_to_v2_7.py
+
+      - name: Build V2-7 -> V2-7.1 -> validated V2-7.2
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+          python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+          python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+
+      - name: Build tested V2-7.5 Agent only
+        run: |
+          set -euo pipefail
+          python3 tools/run_v2_7_5_patch.py build/v272 --output-dir build/v275
+
+      - name: Build V2-7.6 with exact V2-7.2 backend module path
+        run: |
+          set -euo pipefail
+          python3 tools/build_v2_7_6_from_v272.py build/v272 build/v275 --output-dir build/NERO_V2_7_6_V272_Backend_Restore
+
+      - name: Validate final package
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_6_V272_Backend_Restore
+          test -f "$R/NERO_V2_7_1_Unified_Backend.py"
+          test -f "$R/NERO_V2_7_1_Agent.py"
+          test -f "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          test -f "$R/start_nero_v2_7_6.sh"
+          test -f "$R/PATH_CHECK.txt"
+          test -f "$R/README_V2_7_6.md"
+          test -f "$R/SHA256SUMS.txt"
+          python3 -m py_compile "$R/NERO_V2_7_1_Unified_Backend.py" "$R/NERO_V2_7_1_Agent.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          bash -n "$R/start_nero_v2_7_6.sh"
+          (cd "$R" && sha256sum -c SHA256SUMS.txt)
+          test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+
+      - name: Prove launcher equals V2-7.2 except version label
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path('build/v272/start_nero_v2_7_2.sh').read_text()
+          new=Path('build/NERO_V2_7_6_V272_Backend_Restore/start_nero_v2_7_6.sh').read_text()
+          assert new.replace('NERO V2-7.6','NERO V2-7.2') == base
+          assert 'USE_RVIZ="${USE_RVIZ:-true}"' in new
+          assert 'NERO_V2_7_1_Unified_Backend.py' in new
+          assert 'NERO_V2_7_1_Agent.py' in new
+          print('[OK] Launcher startup semantics exactly V2-7.2')
+          PY
+
+      - name: Unit test orchestration patches
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          p='build/NERO_V2_7_6_V272_Backend_Restore/NERO_V2_7_1_Agent.py'
+          spec=importlib.util.spec_from_file_location('v276agent',p); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          logs=[]; calls=[]
+          def runner(name,args):
+              calls.append(name)
+              if name=='approach_planned_grasp': return {'ok':True,'state_after':{'stage':'GRASP_POSE_REACHED'},'warnings':[]}
+              if name=='clamp_gripper': return {'ok':True,'state_after':{'stage':'GRASP_ESTABLISHED'},'warnings':[]}
+              return {'ok':True,'state_after':{'stage':'IDLE'},'warnings':[]}
+          a=m.NeroLLMAgent(logs.append,runner)
+          responses=iter([
+              {'id':'r1','output':[{'type':'function_call','name':'approach_planned_grasp','call_id':'c1','arguments':'{"object_name":"egg_3","candidate_id":"major_aligned__center"}'}],'usage':{}},
+              {'id':'r2','output':[{'type':'message','content':[{'type':'output_text','text':'done'}]}],'usage':{}}
+          ])
+          a._post_responses=lambda payload,api_key: next(responses)
+          a.run_task('Pick up egg_3.',api_key='x')
+          assert calls==['approach_planned_grasp','clamp_gripper'],calls
+          assert any('[LLM ORCHESTRATOR AUTO-CLAMP]' in x for x in logs)
+          logs2=[]; holder={}
+          def runner2(name,args):
+              if name=='observe_scene': holder['a'].request_stop()
+              return {'ok':True,'scene':{},'state_after':{'stage':'OBSERVED'},'warnings':[]}
+          b=m.NeroLLMAgent(logs2.append,runner2); holder['a']=b
+          b._post_responses=lambda payload,api_key:{'id':'s','output':[{'type':'function_call','name':'observe_scene','call_id':'c','arguments':'{}'}],'usage':{}}
+          b.run_task('Pick up egg_3.',api_key='x')
+          assert any('[TASK SUMMARY YELLOW]' in x and 'STATUS: USER_ABORTED' in x for x in logs2)
+          print('[OK] auto-clamp and user-stop summary')
+          PY
+
+      - name: Verify MuJoCo backend function identity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          b=Path('build/v272/NERO_V2_7_1_Unified_Backend.py').read_text()
+          n=Path('build/NERO_V2_7_6_V272_Backend_Restore/NERO_V2_7_1_Unified_Backend.py').read_text()
+          def block(s,a,z):
+              i=s.index(a); j=s.index(z,i); return s[i:j]
+          assert block(b,'def run_sim(','\ndef run_gui(')==block(n,'def run_sim(','\ndef run_gui(')
+          a='    sim_process = mp.Process('
+          z='    try:\n        run_gui('
+          assert block(b,a,z)==block(n,a,z)
+          assert 'with mujoco.viewer.launch_passive(model, data) as viewer:' in n
+          print('[OK] run_sim + MuJoCo process creation are exact V2-7.2 text')
+          PY
+
+      - name: Show package contract
+        run: |
+          R=build/NERO_V2_7_6_V272_Backend_Restore
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
+          cat "$R/PATH_CHECK.txt"
+          cat "$R/SHA256SUMS.txt"
+
+      - name: Upload complete V2-7.6 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_7_6_V272_Backend_Restore
+          path: build/NERO_V2_7_6_V272_Backend_Restore
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
