@@ -50,6 +50,17 @@ jobs:
           python3 -m py_compile "$R/NERO_V2_7_1_Unified_Backend.py" "$R/NERO_V2_7_1_Agent.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
           bash -n "$R/start_nero_v2_7_2.sh"
           test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+      - name: Dump exact V2-7.2 patch anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_2_Hold_Continuity_Wrist_Reorientation
+          echo '===== AGENT approach/clamp/run_task anchors ====='
+          grep -n -E 'def run_task|approach_planned_grasp|clamp_gripper|LLM TASK FAILED|LLM TASK END|tool_runner\(name' "$R/NERO_V2_7_1_Agent.py" | head -n 80
+          echo '===== BACKEND append_gui_log anchor ====='
+          grep -n -A35 -B8 'def append_gui_log' "$R/NERO_V2_7_1_Unified_Backend.py" | head -n 90
+          echo '===== LAUNCHER full ====='
+          cat "$R/start_nero_v2_7_2.sh"
       - name: Upload V2-7.2 snapshot
         uses: actions/upload-artifact@v4
         with:
