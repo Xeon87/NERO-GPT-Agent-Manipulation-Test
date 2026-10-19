@@ -39,9 +39,9 @@ jobs:
         run: python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
       - name: V2-7.1
         run: python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
-      - name: V2-7.2
-        run: python3 tools/upgrade_v2_7_1_to_v2_7_2.py build/v271 --output-dir build/v272
-      - name: V2-7.3
+      - name: V2-7.2 via compatibility shim
+        run: python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+      - name: V2-7.3 via compatibility shim
         run: python3 tools/run_v2_7_3_patch.py build/v272 --output-dir build/v273
       - name: V2-7.4
         run: python3 tools/upgrade_v2_7_3_to_v2_7_4.py build/v273 --output-dir build/NERO_V2_7_4_Agent_Orchestration_Hardening
@@ -57,7 +57,8 @@ jobs:
           test -f "$R/start_nero_v2_7_4.sh"
           test -f "$R/SHA256SUMS.txt"
           test -f "$R/PATH_CHECK.txt"
-          python3 -m py_compile "$R/NERO_V2_7_4_Unified_Backend.py" "$R/NERO_V2_7_4_Agent.py"
+          test -f "$R/README_V2_7_4.md"
+          python3 -m py_compile "$R/NERO_V2_7_4_Unified_Backend.py" "$R/NERO_V2_7_4_Agent.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
           bash -n "$R/start_nero_v2_7_4.sh"
           EXPECTED=3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7
           test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = "$EXPECTED"
@@ -68,6 +69,8 @@ jobs:
           grep -q 'LLM ORCHESTRATOR TERMINAL' "$R/NERO_V2_7_4_Agent.py"
           grep -q 'USER_ABORTED' "$R/NERO_V2_7_4_Agent.py"
           grep -q 'llm_message_bold' "$R/NERO_V2_7_4_Unified_Backend.py"
+          echo '=== FINAL FILES ==='
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
           echo '=== SHA256SUMS ==='
           cat "$R/SHA256SUMS.txt"
 
