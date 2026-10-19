@@ -1,0 +1,189 @@
+name: Clean-room NERO V2-7.5 from V2-7.2
+
+on:
+  push:
+    branches: [v2-7-5-agent-orchestration-from-v272]
+    paths:
+      - "tools/upgrade_v2_7_2_to_v2_7_5.py"
+      - "tools/run_v2_7_5_patch.py"
+      - ".github/workflows/build_v2_7_5_runtime_cleanroom.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-room-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed V2-6 and normalize historical packaging typo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py \
+             NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/upgrade_v2_6_egg_to_v2_7.py')
+          s = p.read_text(encoding='utf-8')
+          old = '        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new = '        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 -m py_compile tools/upgrade_v2_6_egg_to_v2_7.py
+
+      - name: Build V2-7
+        run: python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+
+      - name: Build V2-7.1
+        run: python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+
+      - name: Build validated V2-7.2 baseline
+        run: python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+
+      - name: Build V2-7.5 only from V2-7.2
+        run: python3 tools/run_v2_7_5_patch.py build/v272 --output-dir build/NERO_V2_7_5_Agent_Orchestration_From_V272
+
+      - name: Validate package paths syntax and frozen V69
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_5_Agent_Orchestration_From_V272
+          test -f "$R/NERO_V2_7_5_Unified_Backend.py"
+          test -f "$R/NERO_V2_7_5_Agent.py"
+          test -f "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          test -f "$R/start_nero_v2_7_5.sh"
+          test -f "$R/PATH_CHECK.txt"
+          test -f "$R/README_V2_7_5.md"
+          test -f "$R/SHA256SUMS.txt"
+          test ! -e "$R/NERO_V2_7_1_Unified_Backend.py"
+          test ! -e "$R/NERO_V2_7_1_Agent.py"
+          test ! -e "$R/start_nero_v2_7_2.sh"
+          python3 -m py_compile "$R/NERO_V2_7_5_Unified_Backend.py" "$R/NERO_V2_7_5_Agent.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          bash -n "$R/start_nero_v2_7_5.sh"
+          EXPECTED=3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7
+          test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = "$EXPECTED"
+          (cd "$R" && sha256sum -c SHA256SUMS.txt)
+
+      - name: Prove launcher startup structure is V2-7.2-equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          base = Path('build/v272/start_nero_v2_7_2.sh').read_text(encoding='utf-8')
+          new = Path('build/NERO_V2_7_5_Agent_Orchestration_From_V272/start_nero_v2_7_5.sh').read_text(encoding='utf-8')
+          restored = (new
+              .replace('NERO_V2_7_5_Unified_Backend.py', 'NERO_V2_7_1_Unified_Backend.py')
+              .replace('NERO_V2_7_5_Agent.py', 'NERO_V2_7_1_Agent.py')
+              .replace('NERO V2-7.5', 'NERO V2-7.2'))
+          if restored != base:
+              import difflib
+              print(''.join(difflib.unified_diff(base.splitlines(True), restored.splitlines(True), fromfile='V2-7.2', tofile='V2-7.5-restored')))
+              raise SystemExit('Launcher differs from V2-7.2 beyond allowed entry-name/version substitutions')
+          assert 'USE_RVIZ="${USE_RVIZ:-true}"' in new
+          assert 'use_rviz:="${USE_RVIZ}"' in new
+          assert 'use_rviz:=false' in new
+          assert 'NERO_VIEWER_READY_FILE' not in new
+          assert 'Waiting for MuJoCo viewer handshake' not in new
+          assert 'Post-readiness GUI/backend liveness check' not in new
+          print('[OK] V2-7.5 launcher is V2-7.2 startup-equivalent after allowed substitutions')
+          PY
+
+      - name: Unit test Agent auto-clamp and user-stop summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          p = Path('build/NERO_V2_7_5_Agent_Orchestration_From_V272/NERO_V2_7_5_Agent.py')
+          spec = importlib.util.spec_from_file_location('nero_v275_agent_test', p)
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+
+          # Test A: verified approach must atomically auto-clamp before another LLM request.
+          logs = []
+          calls = []
+          def runner(name, args):
+              calls.append((name, dict(args)))
+              if name == 'approach_planned_grasp':
+                  return {'ok': True, 'state_after': {'stage': 'GRASP_POSE_REACHED'}, 'warnings': []}
+              if name == 'clamp_gripper':
+                  return {'ok': True, 'state_after': {'stage': 'GRASP_ESTABLISHED'}, 'warnings': []}
+              return {'ok': True, 'state_after': {'stage': 'IDLE'}, 'warnings': []}
+          a = mod.NeroLLMAgent(logs.append, runner)
+          responses = iter([
+              {'id':'r1','output':[{'type':'function_call','name':'approach_planned_grasp','call_id':'c1','arguments':'{"object_name":"egg_3","candidate_id":"major_aligned__center"}'}], 'usage':{}},
+              {'id':'r2','output':[{'type':'message','content':[{'type':'output_text','text':'done'}]}], 'usage':{}},
+          ])
+          a._post_responses = lambda payload, api_key: next(responses)
+          a.run_task('Pick up egg_3 and place it into the first empty egg-holder slot.', api_key='test-key')
+          assert [x[0] for x in calls] == ['approach_planned_grasp', 'clamp_gripper'], calls
+          assert any('[LLM ORCHESTRATOR AUTO-CLAMP]' in x for x in logs), logs
+          assert any('[LLM ORCHESTRATOR AUTO-CLAMP RESULT]' in x for x in logs), logs
+
+          # Test B: GUI/user Stop must not bypass final summary.
+          logs2 = []
+          holder = {}
+          def runner2(name, args):
+              if name == 'observe_scene':
+                  holder['agent'].request_stop()
+              return {'ok': True, 'scene': {}, 'state_after': {'stage':'OBSERVED'}, 'warnings': []}
+          b = mod.NeroLLMAgent(logs2.append, runner2)
+          holder['agent'] = b
+          b._post_responses = lambda payload, api_key: {
+              'id':'s1','output':[{'type':'function_call','name':'observe_scene','call_id':'s1c','arguments':'{}'}], 'usage':{}
+          }
+          ret = b.run_task('Pick up egg_3.', api_key='test-key')
+          assert ret is None
+          assert any('[LLM TASK ABORTED]' in x for x in logs2), logs2
+          assert any('[LLM TASK END]' in x for x in logs2), logs2
+          assert any('[TASK SUMMARY YELLOW]' in x and 'STATUS: USER_ABORTED' in x for x in logs2), logs2
+          print('[OK] Agent auto-clamp orchestration test')
+          print('[OK] Agent user-stop summary test')
+          PY
+
+      - name: Validate GUI log styling is lazy and non-startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_5_Agent_Orchestration_From_V272
+          grep -q '_v275_tags_ready' "$R/NERO_V2_7_5_Unified_Backend.py"
+          grep -q 'llm_message_bold' "$R/NERO_V2_7_5_Unified_Backend.py"
+          grep -q 'task_summary_success' "$R/NERO_V2_7_5_Unified_Backend.py"
+          grep -q 'elif "\[LLM " in _msg:' "$R/NERO_V2_7_5_Unified_Backend.py"
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('build/NERO_V2_7_5_Agent_Orchestration_From_V272/NERO_V2_7_5_Unified_Backend.py').read_text()
+          assert s.find('global_log.tag_configure("llm_message_bold"') > s.find('def append_gui_log(text):')
+          print('[OK] LLM bold styling lives inside append_gui_log only')
+          PY
+
+      - name: Show final exact package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_5_Agent_Orchestration_From_V272
+          echo '===== TOP-LEVEL FILES ====='
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
+          echo '===== PATH_CHECK ====='
+          cat "$R/PATH_CHECK.txt"
+          echo '===== SHA256SUMS ====='
+          cat "$R/SHA256SUMS.txt"
+          echo '===== LAUNCHER ENTRY PATHS ====='
+          grep -E '^(BACKEND|AGENT|CORE)=' "$R/start_nero_v2_7_5.sh"
+          grep -E 'for packaged in ' "$R/start_nero_v2_7_5.sh"
+
+      - name: Upload validated complete V2-7.5 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_7_5_Agent_Orchestration_From_V272
+          path: build/NERO_V2_7_5_Agent_Orchestration_From_V272
+          if-no-files-found: error
+          retention-days: 30
