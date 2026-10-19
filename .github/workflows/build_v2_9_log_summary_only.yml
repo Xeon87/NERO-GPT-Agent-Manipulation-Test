@@ -1,0 +1,245 @@
+name: Build NERO V2-9 Log+Summary Only from V2-7.2
+
+on:
+  push:
+    branches:
+      - v2-9-log-summary-only-from-v272
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed V2-6 and normalize historical packaging typo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py \
+             NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tools/upgrade_v2_6_egg_to_v2_7.py')
+          s = p.read_text(encoding='utf-8')
+          old = '        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new = '        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 -m py_compile tools/upgrade_v2_6_egg_to_v2_7.py
+
+      - name: Rebuild exact V2-7.2 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+          python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+          python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+          cp build/v272/NERO_V2_7_1_Unified_Backend.py build/baseline_backend.py
+          cp build/v272/NERO_V2_7_1_Agent.py build/baseline_agent.py
+          cp build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py build/baseline_v69.py
+          cp build/v272/start_nero_v2_7_2.sh build/baseline_launcher.sh
+
+      - name: Apply V2-9 presentation and summary patch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/apply_v2_9_log_summary.py build/v272
+
+      - name: Prove startup and simulation stack are unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp build/baseline_v69.py build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py
+          cmp build/baseline_launcher.sh build/v272/start_nero_v2_7_2.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast
+
+          old = Path('build/baseline_backend.py').read_text(encoding='utf-8')
+          new = Path('build/v272/NERO_V2_7_1_Unified_Backend.py').read_text(encoding='utf-8')
+
+          def fn_src(src, name):
+              tree = ast.parse(src)
+              lines = src.splitlines()
+              for node in ast.walk(tree):
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                      return '\n'.join(lines[node.lineno-1:node.end_lineno])
+              raise RuntimeError(f'function not found: {name}')
+
+          # The actual MuJoCo simulation child must be byte-for-byte identical.
+          assert fn_src(old, 'run_sim') == fn_src(new, 'run_sim'), 'run_sim changed'
+
+          # Critical startup primitives must remain identical in count/text.
+          keys = (
+              'mujoco.viewer.launch_passive',
+              'mp.Process',
+              'multiprocessing',
+              'rclpy.init',
+              'rclpy.shutdown',
+              'sim_ready',
+          )
+          for key in keys:
+              old_lines = [x.strip() for x in old.splitlines() if key in x]
+              new_lines = [x.strip() for x in new.splitlines() if key in x]
+              assert old_lines == new_lines, (key, old_lines, new_lines)
+
+          assert 'llm_message_bold' in new
+          assert 'task_summary_success' in new
+          assert 'task_summary_warning' in new
+          assert 'task_summary_failure' in new
+          print('[OK] run_sim and MuJoCo/multiprocessing startup are exact V2-7.2')
+          PY
+
+      - name: Validate Agent behavior delta is summary bookkeeping only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          old = Path('build/baseline_agent.py').read_text(encoding='utf-8')
+          new = Path('build/v272/NERO_V2_7_1_Agent.py').read_text(encoding='utf-8')
+          assert old != new
+          required = [
+              'V2-9 TASK SUMMARY',
+              '_v29_emit_high_level_summary',
+              '[TASK SUMMARY {color}]',
+              'v29_tool_history.append',
+          ]
+          for x in required:
+              assert x in new, x
+          forbidden = [
+              'LLM ORCHESTRATOR AUTO-CLAMP',
+              'LLM ORCHESTRATOR TERMINAL',
+              'PREGRASP_PHYSICAL_TRACKING_TIMEOUT',
+              'LATE SETTLE WATCH',
+              'viewer handshake',
+          ]
+          for x in forbidden:
+              assert x not in new, x
+          print('[OK] no later-version orchestration/motion patches present')
+          PY
+
+      - name: Syntax and frozen-core checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            build/v272/NERO_V2_7_1_Unified_Backend.py \
+            build/v272/NERO_V2_7_1_Agent.py \
+            build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py \
+            tools/apply_v2_9_log_summary.py
+          bash -n start_nero_v2_9.sh
+          bash -n build/v272/start_nero_v2_7_2.sh
+          test "$(sha256sum build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py | awk '{print $1}')" = \
+            "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+
+      - name: Unit test green yellow red summaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          p = Path('build/v272/NERO_V2_7_1_Agent.py')
+          spec = importlib.util.spec_from_file_location('nero_v29_agent', p)
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+
+          def run_case(result, final_text, expected):
+              logs=[]
+              def runner(name,args):
+                  return dict(result)
+              a=mod.NeroLLMAgent(logs.append, runner)
+              a._task_object_names=lambda task,scene=None: ['egg_1']
+              responses=iter([
+                  {
+                      'id':'r1',
+                      'output':[{
+                          'type':'function_call',
+                          'name':'verify_object_in_slot',
+                          'call_id':'c1',
+                          'arguments':'{"object_name":"egg_1","slot_name":"slot_1"}'
+                      }],
+                      'usage':{}
+                  },
+                  {
+                      'id':'r2',
+                      'output':[{
+                          'type':'message',
+                          'content':[{'type':'output_text','text':final_text}]
+                      }],
+                      'usage':{}
+                  },
+              ])
+              a._post_responses=lambda payload,api_key: next(responses)
+              try:
+                  a.run_task('Place egg_1 into slot_1.', api_key='test')
+              except Exception:
+                  pass
+              assert any(expected in x for x in logs), logs
+
+          run_case(
+              {'ok':True,'object_name':'egg_1','physical_verification':{'object_name':'egg_1'},'warnings':[]},
+              'Task completed successfully.',
+              '[TASK SUMMARY GREEN]'
+          )
+          run_case(
+              {'ok':True,'object_name':'egg_1','physical_verification':{'object_name':'egg_1'},'warnings':['minor recovered issue']},
+              'Task completed successfully.',
+              '[TASK SUMMARY YELLOW]'
+          )
+          run_case(
+              {'ok':False,'physical_verification':{'reason':'VERIFY_FAILED'},'warnings':[]},
+              'Unable to complete the task.',
+              '[TASK SUMMARY RED]'
+          )
+          print('[OK] summary severity: green/yellow/red')
+          PY
+
+      - name: Build distributable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG=build/NERO_V2_9_V272_Startup_Path
+          rm -rf "$PKG"
+          mkdir -p "$PKG/tools"
+          cp start_nero_v2_9.sh "$PKG/"
+          cp tools/apply_v2_9_log_summary.py "$PKG/tools/"
+          cp tools/run_v2_7_2_upgrader.py "$PKG/tools/"
+          cp tools/run_v2_7_2_patch.py "$PKG/tools/"
+          cp tools/upgrade_v2_7_1_to_v2_7_2.py "$PKG/tools/"
+          cat > "$PKG/README_V2_9.md" <<'EOF'
+          # NERO V2-9
+
+          Base: original V2-7.2 startup/build path.
+
+          On every launch, `start_nero_v2_9.sh` first regenerates the original V2-7.2 runtime at:
+
+          `~/mujoco_ws/nero/NERO_V2_7_2_Hold_Continuity_Wrist_Reorientation`
+
+          It then applies only:
+          - bold GUI formatting for `[LLM ...]` messages;
+          - one deterministic high-level summary after `[LLM TASK END]`;
+          - GREEN summary for verified success;
+          - YELLOW summary for success with warnings / incomplete physical verification;
+          - RED summary for failure/exception.
+
+          The V2-7.2 runtime launcher, MuJoCo run_sim, multiprocessing, MoveIt/RViz startup, and frozen V69 core are unchanged.
+          EOF
+          chmod +x "$PKG/start_nero_v2_9.sh"
+          (
+            cd "$PKG"
+            sha256sum start_nero_v2_9.sh tools/*.py > SHA256SUMS.txt
+          )
+          find "$PKG" -maxdepth 2 -type f -printf '%P\n' | sort
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_9_V272_Startup_Path
+          path: build/NERO_V2_9_V272_Startup_Path
+          retention-days: 30
