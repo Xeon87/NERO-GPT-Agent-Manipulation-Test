@@ -17,7 +17,7 @@ if src is None:
     sys.exit(2)
 
 out = home / "mujoco_ws" / "nero" / "NERO_V2_7_2_Hold_Continuity_Wrist_Reorientation"
-patcher = Path(__file__).resolve().with_name("upgrade_v2_7_1_to_v2_7_2.py")
+patcher = Path(__file__).resolve().with_name("run_v2_7_2_patch.py")
 
 print("[INFO] Source V2-7.1:", src)
 print("[INFO] Creating V2-7.2:", out)
