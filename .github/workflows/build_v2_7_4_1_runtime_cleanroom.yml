@@ -1,0 +1,89 @@
+name: Clean-room NERO V2-7.4.1 Runtime
+
+on:
+  push:
+    branches: [v2-7-4-1-gui-startup-hotfix]
+    paths:
+      - "tools/upgrade_v2_7_3_to_v2_7_4.py"
+      - "tools/upgrade_v2_7_3_to_v2_7_4_1.py"
+      - "start_nero_v2_7_4_1.sh"
+      - ".github/workflows/build_v2_7_4_1_runtime_cleanroom.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-room-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Seed V2-6 and normalize historical packaging-only typo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py \
+             NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("tools/upgrade_v2_6_egg_to_v2_7.py")
+          s = p.read_text(encoding="utf-8")
+          old = '        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new = '        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s:
+              s = s.replace(old, new, 1)
+              p.write_text(s, encoding="utf-8")
+          PY
+          python3 -m py_compile tools/upgrade_v2_6_egg_to_v2_7.py
+
+      - name: V2-7
+        run: python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+      - name: V2-7.1
+        run: python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+      - name: V2-7.2 via compatibility shim
+        run: python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+      - name: V2-7.3 via compatibility shim
+        run: python3 tools/run_v2_7_3_patch.py build/v272 --output-dir build/v273
+      - name: V2-7.4.1 hotfix directly from validated V2-7.3
+        run: python3 tools/upgrade_v2_7_3_to_v2_7_4_1.py build/v273 --output-dir build/NERO_V2_7_4_1_GUI_Startup_Hotfix
+
+      - name: Validate final package contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_4_1_GUI_Startup_Hotfix
+          test -f "$R/NERO_V2_7_4_1_Unified_Backend.py"
+          test -f "$R/NERO_V2_7_4_1_Agent.py"
+          test -f "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          test -f "$R/start_nero_v2_7_4_1.sh"
+          test -f "$R/SHA256SUMS.txt"
+          test -f "$R/PATH_CHECK.txt"
+          test -f "$R/README_V2_7_4_1.md"
+          python3 -m py_compile "$R/NERO_V2_7_4_1_Unified_Backend.py" "$R/NERO_V2_7_4_1_Agent.py" "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          bash -n "$R/start_nero_v2_7_4_1.sh"
+          EXPECTED=3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7
+          test "$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')" = "$EXPECTED"
+          ! grep -q 'NERO_V2_7_1_Unified_Backend.py\|NERO_V2_7_1_Agent.py\|NERO_V2_7_4_Unified_Backend.py\|NERO_V2_7_4_Agent.py' "$R/start_nero_v2_7_4_1.sh"
+          grep -q 'NERO_V2_7_4_1_Unified_Backend.py' "$R/start_nero_v2_7_4_1.sh"
+          grep -q 'NERO_V2_7_4_1_Agent.py' "$R/start_nero_v2_7_4_1.sh"
+          grep -q 'Post-readiness GUI/backend liveness check (3.0s)' "$R/start_nero_v2_7_4_1.sh"
+          grep -q 'BACKEND LOG TAIL' "$R/start_nero_v2_7_4_1.sh"
+          grep -q 'LLM ORCHESTRATOR AUTO-CLAMP' "$R/NERO_V2_7_4_1_Agent.py"
+          grep -q 'LLM ORCHESTRATOR TERMINAL' "$R/NERO_V2_7_4_1_Agent.py"
+          grep -q 'USER_ABORTED' "$R/NERO_V2_7_4_1_Agent.py"
+          grep -q '_v2741_bold_tag_ready' "$R/NERO_V2_7_4_1_Unified_Backend.py"
+          echo '=== FINAL FILES ==='
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
+          echo '=== SHA256SUMS ==='
+          cat "$R/SHA256SUMS.txt"
+
+      - name: Upload validated complete runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_7_4_1_GUI_Startup_Hotfix
+          path: build/NERO_V2_7_4_1_GUI_Startup_Hotfix
+          if-no-files-found: error
+          retention-days: 30
