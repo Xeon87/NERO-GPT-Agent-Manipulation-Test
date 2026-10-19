@@ -1,0 +1,39 @@
+name: Validate V2-7 Constraint Grasp Upgrade
+
+on:
+  push:
+    branches: [v2-7-constraint-aware-grasp]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build mock source package from frozen public V2-6 files
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/v26egg
+          cp NERO_V2_6_Unified_Backend.py /tmp/v26egg/
+          cp NERO_V2_6_Agent.py /tmp/v26egg/
+          cp NERO_V69_ReachableZone_BioIK_Planner_Core.py /tmp/v26egg/
+          cp start_nero_v2_6.sh /tmp/v26egg/
+      - name: Run V2-7 upgrader wrapper
+        run: |
+          set -euxo pipefail
+          python3 tools/run_v2_7_upgrader.py /tmp/v26egg --output-dir /tmp/v27
+      - name: Static validation
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile /tmp/v27/NERO_V2_7_Unified_Backend.py
+          python3 -m py_compile /tmp/v27/NERO_V2_7_Agent.py
+          bash -n /tmp/v27/start_nero_v2_7.sh
+          test "$(sha256sum /tmp/v27/NERO_V69_ReachableZone_BioIK_Planner_Core.py | awk '{print $1}')" = "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+          grep -q 'name.*plan_grasp' /tmp/v27/NERO_V2_7_Agent.py
+          grep -q 'move_to_pregrasp' /tmp/v27/NERO_V2_7_Agent.py
+          grep -q 'approach_planned_grasp' /tmp/v27/NERO_V2_7_Agent.py
+          grep -q 'REORIENTATION_REQUIRED_BUT_NOT_IMPLEMENTED_V2_7' /tmp/v27/NERO_V2_7_Unified_Backend.py
+          echo V27_STATIC_VALIDATION_OK
