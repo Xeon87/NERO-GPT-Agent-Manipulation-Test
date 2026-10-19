@@ -21,6 +21,23 @@ jobs:
           python -m py_compile tools/run_v2_7_3_upgrader.py
       - name: Check launcher syntax
         run: bash -n start_nero_v2_7_3.sh
+      - name: Test generated-runtime late-settle marker compatibility
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'tools')
+          import run_v2_7_3_patch as shim
+          variants = [
+              '[V2-7 LATE SETTLE ACCEPT]',
+              '[V2-7.1 LATE SETTLE ACCEPT]',
+              '[V2-7.2 LATE SETTLE ACCEPT]',
+              '[V2-6 LATE SETTLE ACCEPT]',
+          ]
+          for marker in variants:
+              out = shim.normalize_v272_backend_text('before ' + marker + ' after')
+              assert '[V2-6 LATE SETTLE ACCEPT]' in out, (marker, out)
+          print('late-settle compatibility normalization: PASS')
+          PY
       - name: Check V2-7.3 markers and compatibility mapping
         run: |
           grep -q 'V2-7.3 LATE SETTLE WATCH' tools/upgrade_v2_7_2_to_v2_7_3.py
@@ -29,6 +46,7 @@ jobs:
           grep -q 'TASK SUMMARY {color}' tools/upgrade_v2_7_2_to_v2_7_3.py
           grep -q 'NERO_V2_7_1_Unified_Backend.py' tools/run_v2_7_3_patch.py
           grep -q 'NERO_V2_7_1_Agent.py' tools/run_v2_7_3_patch.py
+          grep -q 'normalize_v272_backend_text' tools/run_v2_7_3_patch.py
           grep -q 'run_v2_7_3_patch.py' tools/run_v2_7_3_upgrader.py
           grep -q 'NERO_V2_7_2_Hold_Continuity_Wrist_Reorientation' tools/run_v2_7_3_upgrader.py
           grep -q 'run_v2_7_3_upgrader.py' start_nero_v2_7_3.sh
