@@ -1,0 +1,30 @@
+name: V2-7.3 Static Validation
+
+on:
+  push:
+    branches:
+      - v2-7-3-late-settle-summary
+  workflow_dispatch:
+
+jobs:
+  validate-installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile V2-7.3 installer payload
+        run: |
+          python -m py_compile tools/upgrade_v2_7_2_to_v2_7_3.py
+          python -m py_compile tools/run_v2_7_3_upgrader.py
+      - name: Check launcher syntax
+        run: bash -n start_nero_v2_7_3.sh
+      - name: Check V2-7.3 markers
+        run: |
+          grep -q 'V2-7.3 LATE SETTLE WATCH' tools/upgrade_v2_7_2_to_v2_7_3.py
+          grep -q 'PREGRASP_PHYSICAL_TRACKING_TIMEOUT' tools/upgrade_v2_7_2_to_v2_7_3.py
+          grep -q 'task_summary_success' tools/upgrade_v2_7_2_to_v2_7_3.py
+          grep -q 'TASK SUMMARY {color}' tools/upgrade_v2_7_2_to_v2_7_3.py
+          grep -q 'NERO_V2_7_2_Hold_Continuity_Wrist_Reorientation' tools/run_v2_7_3_upgrader.py
+          grep -q 'run_v2_7_3_upgrader.py' start_nero_v2_7_3.sh
