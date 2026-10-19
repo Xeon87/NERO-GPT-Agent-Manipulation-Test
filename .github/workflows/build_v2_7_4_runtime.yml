@@ -1,0 +1,116 @@
+name: Build NERO V2-7.4 Runtime
+
+on:
+  push:
+    branches:
+      - v2-7-4-agent-transition-bold-log
+    paths:
+      - "tools/upgrade_v2_7_3_to_v2_7_4.py"
+      - "start_nero_v2_7_4.sh"
+      - ".github/workflows/build_v2_7_4_runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Build V2-6 seed package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build
+          mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py build/v26/
+          cp NERO_V2_6_Agent.py build/v26/
+          cp NERO_V69_ReachableZone_BioIK_Planner_Core.py build/v26/
+          cp start_nero_v2_6.sh build/v26/
+
+      - name: Rebuild V2-7
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_6_egg_to_v2_7.py \
+            build/v26 \
+            --output-dir build/v27
+
+      - name: Rebuild V2-7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_7_to_v2_7_1.py \
+            build/v27 \
+            --output-dir build/v271
+
+      - name: Rebuild V2-7.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_7_1_to_v2_7_2.py \
+            build/v271 \
+            --output-dir build/v272
+
+      - name: Rebuild V2-7.3 using compatibility shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/run_v2_7_3_patch.py \
+            build/v272 \
+            --output-dir build/v273
+
+      - name: Build V2-7.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/upgrade_v2_7_3_to_v2_7_4.py \
+            build/v273 \
+            --output-dir build/NERO_V2_7_4_Agent_Orchestration_Hardening
+
+      - name: Strict final runtime checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=build/NERO_V2_7_4_Agent_Orchestration_Hardening
+          test -f "$R/NERO_V2_7_4_Unified_Backend.py"
+          test -f "$R/NERO_V2_7_4_Agent.py"
+          test -f "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          test -f "$R/start_nero_v2_7_4.sh"
+          test -f "$R/SHA256SUMS.txt"
+          test -f "$R/PATH_CHECK.txt"
+          test -f "$R/README_V2_7_4.md"
+
+          python3 -m py_compile \
+            "$R/NERO_V2_7_4_Unified_Backend.py" \
+            "$R/NERO_V2_7_4_Agent.py" \
+            "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py"
+          bash -n "$R/start_nero_v2_7_4.sh"
+
+          EXPECTED=3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7
+          ACTUAL="$(sha256sum "$R/NERO_V69_ReachableZone_BioIK_Planner_Core.py" | awk '{print $1}')"
+          test "$ACTUAL" = "$EXPECTED"
+
+          ! grep -q 'NERO_V2_7_1_Unified_Backend.py\|NERO_V2_7_1_Agent.py' "$R/start_nero_v2_7_4.sh"
+          grep -q 'NERO_V2_7_4_Unified_Backend.py' "$R/start_nero_v2_7_4.sh"
+          grep -q 'NERO_V2_7_4_Agent.py' "$R/start_nero_v2_7_4.sh"
+          grep -q 'LLM ORCHESTRATOR AUTO-CLAMP' "$R/NERO_V2_7_4_Agent.py"
+          grep -q 'USER_ABORTED' "$R/NERO_V2_7_4_Agent.py"
+          grep -q 'v274_terminal_objects' "$R/NERO_V2_7_4_Agent.py"
+          grep -q 'llm_message_bold' "$R/NERO_V2_7_4_Unified_Backend.py"
+
+          echo "===== FINAL RUNTIME TREE ====="
+          find "$R" -maxdepth 1 -type f -printf '%f\n' | sort
+          echo "===== SHA256SUMS ====="
+          cat "$R/SHA256SUMS.txt"
+
+      - name: Upload complete validated V2-7.4 runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_7_4_Agent_Orchestration_Hardening
+          path: build/NERO_V2_7_4_Agent_Orchestration_Hardening
+          if-no-files-found: error
+          retention-days: 30
