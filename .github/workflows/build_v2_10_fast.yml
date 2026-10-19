@@ -1,0 +1,89 @@
+name: Build NERO V2-10 fast
+
+on:
+  push:
+    branches: [v2-10-orient-for-slot-staged-transfer]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild V2-7.2 and V2-9
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build && mkdir -p build/v26
+          cp NERO_V2_6_Unified_Backend.py NERO_V2_6_Agent.py NERO_V69_ReachableZone_BioIK_Planner_Core.py start_nero_v2_6.sh build/v26/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/upgrade_v2_6_egg_to_v2_7.py')
+          s=p.read_text()
+          old='        """# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          new='        "# NERO V2-7 — Constraint-Aware Grasp Planning\\n\\n"\n'
+          if old in s: p.write_text(s.replace(old,new,1))
+          PY
+          python3 tools/upgrade_v2_6_egg_to_v2_7.py build/v26 --output-dir build/v27
+          python3 tools/upgrade_v2_7_to_v2_7_1.py build/v27 --output-dir build/v271
+          python3 tools/run_v2_7_2_patch.py build/v271 --output-dir build/v272
+          python3 tools/apply_v2_9_log_summary.py build/v272
+          cp build/v272/NERO_V2_7_1_Unified_Backend.py build/v29_backend.py
+          cp build/v272/NERO_V2_7_1_Agent.py build/v29_agent.py
+          cp build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py build/v29_v69.py
+          cp build/v272/start_nero_v2_7_2.sh build/v29_launcher.sh
+
+      - name: Apply V2-10 and verify scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/apply_v2_10_orient_for_slot.py build/v272
+          cmp build/v29_agent.py build/v272/NERO_V2_7_1_Agent.py
+          cmp build/v29_v69.py build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py
+          cmp build/v29_launcher.sh build/v272/start_nero_v2_7_2.sh
+          python3 -m py_compile build/v272/NERO_V2_7_1_Unified_Backend.py tools/apply_v2_10_orient_for_slot.py
+          bash -n start_nero_v2_10.sh
+          test "$(sha256sum build/v272/NERO_V69_ReachableZone_BioIK_Planner_Core.py | awk '{print $1}')" = "3afc191590aa7a6959f23fac524f7901145fe5d838532d41dd25ea47c462f4b7"
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, math
+          old=Path('build/v29_backend.py').read_text()
+          new=Path('build/v272/NERO_V2_7_1_Unified_Backend.py').read_text()
+          def fn(src,name):
+              t=ast.parse(src); lines=src.splitlines()
+              for n in ast.walk(t):
+                  if isinstance(n,ast.FunctionDef) and n.name==name:
+                      return '\n'.join(lines[n.lineno-1:n.end_lineno])
+              raise RuntimeError(name)
+          assert fn(old,'run_sim')==fn(new,'run_sim')
+          assert 'V2-10 ORIENT TRANSFER' in new
+          assert 'v210_orient_vertical_clearance' in new
+          assert 'v210_orient_high_transfer_' in new
+          assert '_v272_execute_wrist_bounded_pose(' in new
+          # Observed failed transfer: ~151 mm horizontal -> four <=45 mm steps.
+          a=(-0.42457,-0.15071); b=(-0.4225,0.0)
+          d=math.hypot(b[0]-a[0],b[1]-a[1]); n=max(1,math.ceil(d/0.045))
+          assert n==4 and d/n<=0.045
+          print('[OK] V2-10 scope and staged geometry verified')
+          PY
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG=build/NERO_V2_10_OrientForSlot_StagedTransfer
+          mkdir -p "$PKG/tools"
+          cp start_nero_v2_10.sh "$PKG/"
+          cp tools/apply_v2_9_log_summary.py tools/apply_v2_10_orient_for_slot.py tools/run_v2_7_2_upgrader.py tools/run_v2_7_2_patch.py tools/upgrade_v2_7_1_to_v2_7_2.py "$PKG/tools/"
+          cat > "$PKG/README_V2_10.md" <<'EOF'
+          # NERO V2-10
+          V2-9 base. Only `orient_for_slot()` Step A changes: vertical clearance first, then high-Z XY transfer in <=45 mm segments. Original V2-7.2 bounded wrist reorientation and all other behavior remain unchanged.
+          Runtime path and second-layer launcher remain the original V2-7.2 path/launcher.
+          EOF
+          chmod +x "$PKG/start_nero_v2_10.sh"
+          (cd "$PKG" && sha256sum start_nero_v2_10.sh tools/*.py > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NERO_V2_10_OrientForSlot_StagedTransfer
+          path: build/NERO_V2_10_OrientForSlot_StagedTransfer
+          retention-days: 30
